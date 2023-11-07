@@ -69,7 +69,8 @@ def main(args):
     val_ann_file = join(args.dir_data, 'fusion_data', 'nus_infos_val.coco.json') 
     
     if not args.dir_checkpoint:
-        args.dir_checkpoint = join(args.dir_data, 'fusion_data', 'train_result', 'radiant_pgd')
+        # args.dir_checkpoint = join(args.dir_data, 'fusion_data', 'train_result', 'radiant_pgd')
+        args.dir_checkpoint = "dir_results"
     
     args.out_path = join(args.dir_data, 'fusion_data', 'dwn_radiant_pgd')              
     mkdir(args.out_path) 
@@ -80,7 +81,7 @@ def main(args):
     model.init_weights()   
     model = MMDataParallel(model.to(device), device_ids=available_gpu_ids)
     
-    f_checkpoint = join(args.dir_checkpoint, 'checkpoint.tar')        
+    f_checkpoint = join(args.dir_checkpoint, 'checkpoint_radarbranch_mini.tar')        
     if os.path.isfile(f_checkpoint):
         print('load model')
         checkpoint = torch.load(f_checkpoint)                    
@@ -89,9 +90,9 @@ def main(args):
         sys.exit('checkpoint not found') 
         
     ann_files = dict(train_mini = train_ann_file_mini,
-                     val_mini = val_ann_file_mini,
-                     train = train_ann_file,
-                     val = val_ann_file)    
+                    val_mini = val_ann_file_mini,
+                    train = train_ann_file,
+                     al = val_ann_file)    
     
     if args.select_data is not None:       
         assert args.select_data in ann_files
