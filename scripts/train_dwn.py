@@ -96,8 +96,8 @@ class FusionDataset(Dataset):
         diff_d = abs(d_cam - d_rd)
         
         data_in = torch.from_numpy(np.array([cls_idx, lvl_cam, lvl_rd, score_cam, score_rd,\
-                                             d_cam, d_rd, diff_d, vx_cam, vz_cam, vx_rd, vz_rd,\
-                                             v_prj, v_mag_rd, diff_pixel, rcs], dtype=np.float32))
+                                            d_cam, d_rd, diff_d, vx_cam, vz_cam, vx_rd, vz_rd,\
+                                            v_prj, v_mag_rd, diff_pixel, rcs], dtype=np.float32))
             
         gt = torch.from_numpy(np.array([d_gt, d_cam, d_rd, obj_idx_cam, obj_idx_rd], dtype=np.float32))
         
@@ -219,7 +219,6 @@ def init_params(args, model, optimizer):
             state_dict_best = checkpoint['state_dict_best']
         else:            
             print('No checkpoint file is found.')
-             
     return loss_train, loss_val, start_epoch, state_dict_best, loss_val_min
 
 
@@ -256,15 +255,14 @@ def save_checkpoint(epoch, model, optimizer, loss_train, loss_val, loss_val_min,
              'loss_val_min': loss_val_min,
              'state_dict_best': state_dict_best}
     
-    torch.save(state, join(args.dir_result, 'checkpoint.tar'))
-    
+    torch.save(state, join(args.dir_result, 'checkpoint_dwn.tar'))
     return loss_val_min, state_dict_best
 
 
 def main(args):
     if args.dir_data == None:
         this_dir = os.path.dirname(__file__)
-        args.dir_data = join(this_dir, '..', 'data', 'nuscenes', 'fusion_data', 'dwn_radiant_fcos3d')
+        args.dir_data = join(this_dir, '..', 'data', 'nuscenes', 'fusion_data', 'dwn_radiant_pgd')
     
     if not args.dir_result:
         args.dir_result = join(args.dir_data, 'train_result')              
@@ -272,6 +270,8 @@ def main(args):
     
     train_ann_files = [join(args.dir_data, 'train.json')] 
     val_ann_files = [join(args.dir_data, 'val.json')]
+    # train_ann_files = [join(args.dir_data, 'train_mini.json')] 
+    # val_ann_files = [join(args.dir_data, 'val_mini.json')]
     
     device0, available_gpu_ids = init_env()
     args.num_gpus = len(available_gpu_ids)
@@ -280,7 +280,7 @@ def main(args):
     if not args.do_eval:
         train_loader = DataLoader(dataset = FusionDataset(train_ann_files),
                           batch_size = args.num_gpus * args.samples_per_gpu,
-                          shuffle = True,
+                        shuffle = True,
                           num_workers = args.num_gpus * args.workers_per_gpu)
        
     val_loader = DataLoader(dataset = FusionDataset(val_ann_files),
@@ -329,7 +329,7 @@ def main(args):
 if __name__ == '__main__': 
     parser = argparse.ArgumentParser()    
     parser.add_argument('--dir_data', type=str)
-    parser.add_argument('--dir_result', type=str)
+    parser.add_argument("--dir_result", type=str, default="dir_results")
     parser.add_argument('--epochs', type=int, default=200) 
     parser.add_argument('--resume', action='store_true', default=False, help='resume training from checkpoint')    
     parser.add_argument('--seed', type=int, default=0)
@@ -340,5 +340,6 @@ if __name__ == '__main__':
     parser.add_argument('--log_interval', type=int, default=100)   
     parser.add_argument('--do_eval', action='store_true', default=False)
 
-    args = parser.parse_args()    
+    args = parser.parse_args()
+
     main(args)

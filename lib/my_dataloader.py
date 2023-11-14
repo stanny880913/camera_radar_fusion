@@ -108,7 +108,8 @@ def build_dataloader(dataset,
     rank, world_size = get_dist_info()   
 
     sampler = GroupSampler(dataset, samples_per_gpu) if shuffle else None
-    #batch_size = num_gpus * samples_per_gpu  
+    # batch_size = num_gpus * samples_per_gpu  
+    # num_workers = num_gpus * workers_per_gpu 
     batch_size = 1
     num_workers = 1
 

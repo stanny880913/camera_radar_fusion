@@ -271,24 +271,29 @@ class SingleStageDetector(BaseDetector):
             
     #INFO x_other is the radar backbone output
     def extract_feat(self, img, radar_map):
-
+        # TODO 確認radar input的channel到底有什麼
+        # radar_map.shape =  torch.Size([1(batch_size), 10(channel), 928, 1600])
+        # print("radar map info = ",radar_map)
         #img經過backbone 
         x_img = self.backbone_img(img)
-        #radarimg經過backbone
+        #radar經過backbone
         x_other = self.backbone_other(radar_map)
         
         x_cat = []
         for x_i, x_o in zip(x_img, x_other):
             x_cat.append(torch.cat([x_i, x_o], dim=1))
-        
+
+        #go through bottleneck, fusion_convs is bottleneck setting
         for i in range(3):
             x_cat[i+1] = self.fusion_convs[i](x_cat[i+1])
 
         #img經過Cam Neck
         #x_img = self.neck_img(x_img)
         x_img = self.neck_img(x_cat)
+        # print("image feature = ",x_img)
         #fusion經過Radar Neck
         x_cat = self.neck_fusion(x_cat)
+        # print("concat feature = ",x_cat)
 
         return x_img, x_cat
 
@@ -315,6 +320,7 @@ class SingleStageMono3DDetector(SingleStageDetector):
         assert isinstance(imgs, list)
         return [self.extract_feat(img) for img in imgs]
 
+    #INFO 這邊進入extract feature
     def forward_train(self,
                       img,
                       img_metas,
@@ -1036,7 +1042,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
         scale1, scale2 = radar_scale[0:2]
         radarOffset = scale1(radarOffset).float()
         radarDepthOffset = scale2(radarDepthOffset).float()        
-
+        #INFO return 預測結果
         return cls_score, bbox_pred, dir_cls_pred, attr_pred, centerness, \
             cls_feat, reg_feat, radarOffset, radarDepthOffset, radarClass
 
@@ -1476,12 +1482,12 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
             indices_p_all.append(indices_p)
             indices_r_all.append(indices_r)
             idx_pts_start += num_points_per_lvl[idx_level]
-             
+            
         indices_p_all = torch.cat(indices_p_all, dim=0)   
         indices_r_all = torch.cat(indices_r_all, dim=0) 
-         
+        
         n_pts_associated_with_rd = indices_p_all.shape[0]
-     
+    
         if num_gts == 0:  
             return gt_labels.new_full((n_pts_associated_with_rd,), self.background_label), \
                     centers2d.new_zeros((0, 2)), \
@@ -1490,18 +1496,18 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
                     indices_p_all, \
                     gt_labels.new_zeros((n_pts_associated_with_rd,), dtype=bool), \
                     idx_box_r.new_zeros((0,))
-                               
+                            
         regress_ranges = regress_ranges[:, None, :].expand(
             num_points, num_gts, 2) 
         gt_bboxes = gt_bboxes[None].expand(num_points, num_gts, 4) 
         centers2d = centers2d[None].expand(num_points, num_gts, 2)  
         gt_bboxes_3d = gt_bboxes_3d[None].expand(num_points, num_gts,  
-                                                  self.bbox_code_size)
+                                                self.bbox_code_size)
         depths = depths[None, :, None].expand(num_points, num_gts, 1)  
         xs, ys = points[:, 0], points[:, 1]
         xs = xs[:, None].expand(num_points, num_gts)  
         ys = ys[:, None].expand(num_points, num_gts)  
-           
+        
         delta_xs = (xs - centers2d[..., 0])[..., None] 
         delta_ys = (ys - centers2d[..., 1])[..., None]
         bbox_targets_3d = torch.cat((delta_xs, delta_ys, depths), dim=-1) 
@@ -1511,7 +1517,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
         top = ys - gt_bboxes[..., 1]
         bottom = gt_bboxes[..., 3] - ys
         bbox_targets = torch.stack((left, top, right, bottom), -1)  
-  
+
         association_msk = msk_r[indices_r_all]            
         indices_gt_box = idx_box_r[indices_r_all]
         radar_depths = d_r[indices_r_all]
@@ -1529,7 +1535,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
         labels = gt_labels.new_zeros(indices_p_all.shape)  
         labels[msk_positive] = gt_labels[indices_gt_box[msk_positive]]
         labels[torch.logical_not(msk_positive)] = self.background_label
-              
+            
         bbox_targets_3d = bbox_targets_3d[ indices_p_all[msk_positive], indices_gt_box[msk_positive] ]         
         delta_depths = bbox_targets_3d[:,2] - radar_depths[msk_positive]  
         
@@ -1641,8 +1647,8 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
             concat_lvl_centerness_targets, concat_lvl_attr_targets
 
     def _get_target_single(self, gt_bboxes, gt_labels, gt_bboxes_3d,
-                           gt_labels_3d, centers2d, depths, attr_labels,
-                           points, regress_ranges, num_points_per_lvl):
+                        gt_labels_3d, centers2d, depths, attr_labels,
+                        points, regress_ranges, num_points_per_lvl):
         """Compute regression and classification targets for a single image."""
         num_points = points.size(0)
         num_gts = gt_labels.size(0)
@@ -1650,14 +1656,14 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
             gt_bboxes_3d = gt_bboxes_3d.tensor.to(gt_bboxes.device)
         if num_gts == 0:
             return gt_labels.new_full((num_points,), self.background_label), \
-                   gt_bboxes.new_zeros((num_points, 4)), \
-                   gt_labels_3d.new_full(
-                       (num_points,), self.background_label), \
-                   gt_bboxes_3d.new_zeros((num_points, self.bbox_code_size)), \
-                   gt_bboxes_3d.new_zeros((num_points,)), \
-                   attr_labels.new_full(
-                       (num_points,), self.attr_background_label), \
-                   gt_bboxes_3d.new_zeros((num_points,), dtype=torch.long)
+                gt_bboxes.new_zeros((num_points, 4)), \
+                gt_labels_3d.new_full(
+                    (num_points,), self.background_label), \
+                gt_bboxes_3d.new_zeros((num_points, self.bbox_code_size)), \
+                gt_bboxes_3d.new_zeros((num_points,)), \
+                attr_labels.new_full(
+                    (num_points,), self.attr_background_label), \
+                gt_bboxes_3d.new_zeros((num_points,), dtype=torch.long)
 
         gt_bboxes_3d[..., 6] = -torch.atan2(
             gt_bboxes_3d[..., 0], gt_bboxes_3d[..., 2]) + gt_bboxes_3d[..., 6]
@@ -1670,7 +1676,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
         gt_bboxes = gt_bboxes[None].expand(num_points, num_gts, 4)
         centers2d = centers2d[None].expand(num_points, num_gts, 2)
         gt_bboxes_3d = gt_bboxes_3d[None].expand(num_points, num_gts,
-                                                 self.bbox_code_size)
+                                                self.bbox_code_size)
         depths = depths[None, :, None].expand(num_points, num_gts, 1)
         xs, ys = points[:, 0], points[:, 1]
         xs = xs[:, None].expand(num_points, num_gts)

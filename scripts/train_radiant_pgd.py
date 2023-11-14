@@ -483,10 +483,10 @@ def main(args):
 
     if args.do_eval:
         f_checkpoint_mlp = join(
-            args.dir_data,
-            "fusion_data",
-            "dwn_radiant_pgd",
-            "train_result",
+            args.dir_result,
+            # "fusion_data",
+            # "dwn_radiant_pgd",
+            # "train_result",
             "checkpoint_dwn.tar",
         )
         model_mlp = FusionMLP()
@@ -494,7 +494,7 @@ def main(args):
         model_mlp.load_state_dict(filter_state_dict_keys(checkpoint_mlp["state_dict"]))
 
         data_loader = init_data_loader(args, NuScenesFusionDataset, "test")
-        f_checkpoint = join(args.dir_result, "checkpoint_branch.tar")
+        f_checkpoint = join(args.dir_result, "checkpoint_radar_branch.tar")
         if os.path.isfile(f_checkpoint):
             print("load model")
             checkpoint = torch.load(f_checkpoint)
