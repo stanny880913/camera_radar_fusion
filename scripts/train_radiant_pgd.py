@@ -494,7 +494,7 @@ def main(args):
         model_mlp.load_state_dict(filter_state_dict_keys(checkpoint_mlp["state_dict"]))
 
         data_loader = init_data_loader(args, NuScenesFusionDataset, "test")
-        f_checkpoint = join(args.dir_result, "checkpoint_radar_branch.tar")
+        f_checkpoint = join(args.dir_result, "checkpoint_branch.tar")
         if os.path.isfile(f_checkpoint):
             print("load model")
             checkpoint = torch.load(f_checkpoint)
@@ -544,7 +544,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--do_eval",
         action="store_true",
-        default=False,
+        default= True,
         help="compute mAP for testing set",
     )
     parser.add_argument("--eval_set", type=str, default="val", choices=["val", "test"])

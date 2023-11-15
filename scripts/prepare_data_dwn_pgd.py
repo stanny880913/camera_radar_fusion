@@ -24,7 +24,7 @@ def mkdir(dir1):
         os.makedirs(dir1)
         print('make directory %s' % dir1)
         
-              
+            
 def init_env():    
     use_cuda = torch.cuda.is_available()    
     device0 = torch.device('cuda:0' if use_cuda else 'cpu')    
@@ -74,14 +74,14 @@ def main(args):
     
     args.out_path = join(args.dir_data, 'fusion_data', 'dwn_radiant_pgd')              
     mkdir(args.out_path) 
-              
+            
     device, available_gpu_ids = init_env()
     
     model = PGDFusion3D(**cfg.model_args)
     model.init_weights()   
     model = MMDataParallel(model.to(device), device_ids=available_gpu_ids)
     
-    f_checkpoint = join(args.dir_checkpoint, 'checkpoint_radarbranch_mini.tar')        
+    f_checkpoint = join(args.dir_checkpoint, 'checkpoint_branch.tar')        
     if os.path.isfile(f_checkpoint):
         print('load model')
         checkpoint = torch.load(f_checkpoint)                    
@@ -92,7 +92,7 @@ def main(args):
     ann_files = dict(train_mini = train_ann_file_mini,
                     val_mini = val_ann_file_mini,
                     train = train_ann_file,
-                     al = val_ann_file)    
+                    val = val_ann_file)    
     
     if args.select_data is not None:       
         assert args.select_data in ann_files
