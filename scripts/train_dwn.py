@@ -24,6 +24,7 @@ def train(args, model, train_loader, optimizer, epoch):
     for batch_idx, batch in enumerate(train_loader):              
         optimizer.zero_grad() 
         output = model(batch['data_in'])
+        # 計算alpha=0 or 1
         loss = cal_loss(output, batch['gt'])                  
         ave_loss += loss.item()
         
@@ -107,6 +108,7 @@ class FusionDataset(Dataset):
 
 
 class FusionMLP(nn.Module):
+    # INFO 定義DWN模型架構
     def __init__(self):
         super().__init__()
 
@@ -121,7 +123,7 @@ class FusionMLP(nn.Module):
         x = F.relu(self.fc3(x))
         return self.fc4(x)
     
-    
+
 def cal_loss(output, gt):
     
     gt = gt.to(output.device)
@@ -141,7 +143,7 @@ def cal_loss(output, gt):
     
     criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)   
     loss = criterion(output, label)
-    
+    # return 0 or 1
     return loss
 
 
@@ -156,20 +158,20 @@ def cal_metrics(output, gt):
     error_rd = torch.abs(d_rd - d_gt)
     
     label = (error_rd < error_cam).to(torch.float32)
-      
+    
     score = output.squeeze(1).detach().cpu().numpy()
     label = label.detach().cpu().numpy()
     
     ap = average_precision_score(label, score)
     
     loss_mae = torch.nn.L1Loss(reduction='mean')
-      
+    
     prd_score = output.squeeze(1).sigmoid()
     thres_score = 0.4
     d_cat = torch.stack([d_cam,d_rd], dim=1)
     idx2 = (prd_score > thres_score).to(torch.int64)
     idx1 = torch.arange(d_cat.shape[0], device=d_cat.device)
-      
+    
     gt_idx = (error_rd < error_cam).to(torch.int64)
     
     d_prd = d_cat[idx1,idx2]

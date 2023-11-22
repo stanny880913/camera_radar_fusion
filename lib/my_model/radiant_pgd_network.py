@@ -18,6 +18,11 @@ from lib.my_model.focal_loss import FocalLoss
 from lib.my_model.smooth_l1_loss import SmoothL1Loss
 from lib.my_model.cross_entropy_loss import CrossEntropyLoss
 from lib.my_model.bbox_coder import PGDBBoxCoder
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+
 
 loss_registry = dict(FocalLoss=FocalLoss, SmoothL1Loss=SmoothL1Loss, 
                      CrossEntropyLoss=CrossEntropyLoss,
@@ -288,8 +293,8 @@ class SingleStageDetector(BaseDetector):
             x_cat[i+1] = self.fusion_convs[i](x_cat[i+1])
 
         #img經過Cam Neck
-        #x_img = self.neck_img(x_img)
-        x_img = self.neck_img(x_cat)
+        x_img = self.neck_img(x_img)
+        #x_img = self.neck_img(x_cat)
         # print("image feature = ",x_img)
         #fusion經過Radar Neck
         x_cat = self.neck_fusion(x_cat)
@@ -342,14 +347,13 @@ class SingleStageMono3DDetector(SingleStageDetector):
                                               attr_labels, gt_bboxes_ignore,
                                               radar_pts)
         return losses
-    
-    
 
+
+    #INFO Do val 
     def simple_test(self, img, img_metas, model_mlp, radar_map, radar_pts, rescale=False): 
- 
         x_img, x_cat = self.extract_feat(img, radar_map[0])       
         outs = self.bbox_head(x_img, x_cat)  
-        
+        # 下一步會進到
         if self.eval_mono:
             bbox_outputs = self.bbox_head.get_bboxes(
                 *outs[:-3], img_metas, rescale=rescale)      
@@ -375,10 +379,10 @@ class SingleStageMono3DDetector(SingleStageDetector):
         if self.bbox_head.pred_bbox2d:
             for result_dict, img_bbox2d in zip(bbox_list, bbox2d_img):
                 result_dict['img_bbox2d'] = img_bbox2d
-
+        
+        print("bbox_list = ",bbox_list)
         return bbox_list
-    
-    
+
     def forward_create_data(self,
                           img,
                           img_metas,
@@ -494,7 +498,7 @@ class BaseMono3DDenseHead(BaseModule, metaclass=ABCMeta):
 
 
 class AnchorFreeMono3DHead(BaseMono3DDenseHead):
-   
+
     _version = 1
 
     def _init_layers(self):
@@ -581,6 +585,7 @@ class AnchorFreeMono3DHead(BaseMono3DDenseHead):
 
 
     def forward_single(self, x_img, x_cat):        
+        # return 會跳到1035行的forward_single
         cls_feat = x_img
         reg_feat = x_img    
         
@@ -1006,7 +1011,8 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
 
 
     def forward_single(self, x_img, x_cat, scale, radar_scale, stride):
-        
+        #INFO cls_score, bbox_pred, dir_cls_pred, attr_pred, cls_feat, reg_feat,\ are
+        #INFO camera branch outputs:
         cls_score, bbox_pred, dir_cls_pred, attr_pred, cls_feat, reg_feat,\
         radar_cls_feat, radar_reg_feat = super().forward_single(x_img, x_cat)
         
@@ -1042,7 +1048,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
         scale1, scale2 = radar_scale[0:2]
         radarOffset = scale1(radarOffset).float()
         radarDepthOffset = scale2(radarDepthOffset).float()        
-        #INFO return 預測結果
+        #INFO radar branch output預測結果
         return cls_score, bbox_pred, dir_cls_pred, attr_pred, centerness, \
             cls_feat, reg_feat, radarOffset, radarDepthOffset, radarClass
 
@@ -1879,7 +1885,7 @@ class PGDFusionHead(FCOSMono3DHead2):
                 normal_init(conv_weight, std=0.01)
 
     def forward(self, feats_img, feats_cat):
-
+        # 會跳到609行的forward_single
         return multi_apply(self.forward_single, feats_img, feats_cat,
                            self.scales, self.radar_scales, self.strides)
 

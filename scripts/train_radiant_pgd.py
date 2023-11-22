@@ -99,8 +99,6 @@ def clip_grads(params, grad_clip=dict(max_norm=35, norm_type=2)):
     params = list(filter(lambda p: p.requires_grad and p.grad is not None, params))
     if len(params) > 0:
         return clip_grad.clip_grad_norm_(params, **grad_clip)
-
-
 def single_gpu_test(model, model_mlp, data_loader):
     """Test model with single gpu.
 
@@ -487,13 +485,15 @@ def main(args):
             # "fusion_data",
             # "dwn_radiant_pgd",
             # "train_result",
-            "checkpoint_dwn.tar",
+            "checkpoint_dwn.tar"
+            #"pre_checkpoint_dwn.tar"
         )
         model_mlp = FusionMLP()
         checkpoint_mlp = torch.load(f_checkpoint_mlp)
         model_mlp.load_state_dict(filter_state_dict_keys(checkpoint_mlp["state_dict"]))
 
         data_loader = init_data_loader(args, NuScenesFusionDataset, "test")
+        #f_checkpoint = join(args.dir_result, "pre_checkpoint_branch.tar") 
         f_checkpoint = join(args.dir_result, "checkpoint_branch.tar")
         if os.path.isfile(f_checkpoint):
             print("load model")
@@ -544,7 +544,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--do_eval",
         action="store_true",
-        default= True,
+        default= False,
         help="compute mAP for testing set",
     )
     parser.add_argument("--eval_set", type=str, default="val", choices=["val", "test"])

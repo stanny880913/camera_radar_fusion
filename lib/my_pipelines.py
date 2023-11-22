@@ -19,7 +19,7 @@ def label_radar_points(results):
     thres_v_error = 0.2
     radar_pts = results['radar_pts']
     gt_bboxes_cam3d = results['gt_bboxes_3d']
-       
+    
     if len(gt_bboxes_cam3d.tensor) != 0:           
         vxf_list, vzf_list = gt_bboxes_cam3d.tensor[:,-2].numpy(), gt_bboxes_cam3d.tensor[:,-1].numpy()
         
@@ -37,7 +37,7 @@ def label_radar_points(results):
         
         gt_indices = []  
         obj_msk = []    
-               
+            
         n_pts = len(x_list)
         dist_mat = np.zeros((n_pts, n_box))
         v_error_mat = np.full((n_pts, n_box), -1.0)
@@ -57,7 +57,7 @@ def label_radar_points(results):
                     v_error_mat[i,j] = abs( (vxf*vx + vzf*vz)/(vx**2 + vz**2) - 1 )
                     
         msk_v_match = np.logical_and(v_error_mat>=0, v_error_mat < thres_v_error)          
-                       
+                    
         for i in range(n_pts):
             if msk_moving[i]:
                 msk_valid = np.logical_and( dist_mat[i] < thres_dist, msk_v_match[i] )                
@@ -73,7 +73,7 @@ def label_radar_points(results):
             else:
                 gt_indices.append(-100)
                 obj_msk.append(False)    
-         
+        
         gt_indices, obj_msk = np.array(gt_indices), np.array(obj_msk)
     else:  
         gt_indices=-100*np.ones(radar_pts.shape[1])
@@ -133,7 +133,7 @@ def cal_trans_matrix(nusc, sensor1_token, sensor2_token):
     trans_matrix = reduce(np.dot, [M_ref_from_global, M_ref_to_global])   
     return trans_matrix
 
-
+#INFO create radar_map and radar_pts,training的freeze後和prepare_test_img後會進來
 def load_multi_radar_to_cam(nusc, cam2radar_mappings, results):
     sample_token = results['img_info']['token']
     cam_token =  results['img_info']['id']   
@@ -143,57 +143,67 @@ def load_multi_radar_to_cam(nusc, cam2radar_mappings, results):
     RadarPointCloud.disable_filters()
     n_dims = RadarPointCloud.nbr_dims()
     all_pc = RadarPointCloud(np.zeros((n_dims, 0)))
-       
+    
     for radar_channel in radar_channels:
         radar_token = sample['data'][radar_channel]
         radar_path = nusc.get_sample_data_path(radar_token)            
         pc = RadarPointCloud.from_file(radar_path)
-        
+
+        # 計算變換矩陣 T_r2c，將雷達點變換到相機坐標系
         T_r2c = cal_trans_matrix(nusc, radar_token, cam_token)
         pc.transform(T_r2c)      
         R_r2c = T_r2c[:3,:3] 
+        # 將雷達點雲中的速度向量（v0 和 v0_comp）從雷達坐標變換到相機坐標
         v0 = np.vstack(( pc.points[[6,7],:], np.zeros(pc.nbr_points()) ))  
         v0_comp = np.vstack(( pc.points[[8,9],:], np.zeros(pc.nbr_points()) )) 
         v1 = R_r2c.dot(v0)
         v1_comp = R_r2c.dot(v0_comp)
         
+        #這3行使用變換後的點和速度更新雷達點雲（all_pc）
         pc.points[[6,7],:] = v1[[0,2],:]         
         pc.points[[8,9],:] = v1_comp[[0,2],:]                  
         all_pc.points = np.hstack((all_pc.points, pc.points))
-            
+    # 從合併的雷達點雲中提取相關信息
     xz_cam = all_pc.points[[0,2],:]   
     v_raw = all_pc.points[[6,7],:]    
     v_comp = all_pc.points[[8,9],:]   
     rcs = all_pc.points[5,:]
     
+    # 使用 proj2im 函數將雷達點投影到圖像平面，並基於一個掩碼（msk）提取相關信息
+    # proj2im會回傳投影後的image x座標,y座標跟深度
+    # 然後，程式碼會使用掩碼 msk 提取上述三個值中的相關信息。msk 是一個布爾數組，其中 True 表示該點雲在圖像內，False 表示該點雲在圖像外
     x_i, y_i, depth, msk = proj2im(nusc, all_pc, cam_token)
     x_i, y_i, depth = x_i[msk], y_i[msk], depth[msk]
-    
+    # 基於掩碼過濾提取的信息
     xz_cam, v_raw, v_comp = xz_cam[:,msk], v_raw[:,msk], v_comp[:,msk]  
     rcs = rcs[msk]
+    # 將過濾後的雷達信息組合成相機坐標系中的雷達點雲
     xy_im = np.stack([x_i, y_i])     
     radar_pts = np.concatenate([xz_cam, xy_im, v_comp, v_raw], axis=0)  
 
     radar_pts = np.concatenate([radar_pts, rcs[None,:]], axis=0)  
     
+    #初始化一個空的 3D 數組（radar_map），用於存儲雷達地圖信息
     h_im, w_im = 900, 1600
+    #INFO radar_map.shape = (900, 1600, 10)
     radar_map = np.zeros( (h_im, w_im, 10) , dtype=float) 
-    
+    #確保投影的圖像坐標在有效範圍內
     x_i = np.clip(x_i, 0, w_im - 1)
     y_i = np.clip(y_i, 0, h_im - 1)
-    
+    #提取 x 坐標並檢查 xz_cam 中的 y 坐標是否等於深度
     x = xz_cam[0,:]
     assert np.array_equal(xz_cam[1,:], depth)
-    
+    # 計算雷達點的速度及其振幅
     vx, vz = v_raw[0,:], v_raw[1,:]
     v_amplitude = (vx**2 + vz**2)**0.5
     vx_comp, vz_comp = v_comp[0,:], v_comp[1,:]
     v_comp_amplitude = (vx_comp**2 + vz_comp**2)**0.5
-
+    # 更新雷達地圖，確保僅考慮最近的點
     for i in range(len(x_i)):
         x_one, y_one = int(round( x_i[i] )), int(round( y_i[i] )) 
-              
+        # input 10 channel info 
         if radar_map[y_one,x_one,0] == 0 or radar_map[y_one,x_one,0] > depth[i]:
+            #INFO radar inputs
             radar_map[y_one,x_one,:] = [x[i], depth[i], 1, vx[i], vz[i], v_amplitude[i], vx_comp[i], vz_comp[i], v_comp_amplitude[i], rcs[i]]  
             
     results['radar_map'] = radar_map.astype('float32')
