@@ -18,10 +18,7 @@ from lib.my_model.focal_loss import FocalLoss
 from lib.my_model.smooth_l1_loss import SmoothL1Loss
 from lib.my_model.cross_entropy_loss import CrossEntropyLoss
 from lib.my_model.bbox_coder import PGDBBoxCoder
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
+from lib.my_model.threedDDeformableConvolutions.DDeformableBlock import DeformConv3d
 
 
 loss_registry = dict(FocalLoss=FocalLoss, SmoothL1Loss=SmoothL1Loss, 
@@ -161,7 +158,31 @@ class FusionConvBlock(BaseModule):
         self.norm2_name, norm2 = build_norm_layer(norm_cfg, planes, postfix=2)
         self.norm3_name, norm3 = build_norm_layer(norm_cfg, outplanes, postfix=3)
         
-        self.conv1 = build_conv_layer(
+        # self.conv1 = build_conv_layer(
+        #     conv_cfg,
+        #     inplanes,
+        #     planes,
+        #     kernel_size=1,
+        #     bias=True)      
+        # self.add_module(self.norm1_name, norm1)
+        
+        # self.conv2 = build_conv_layer(
+        #     conv_cfg,
+        #     planes,
+        #     planes,
+        #     kernel_size=3,
+        #     padding=1,
+        #     bias=True)        
+        # self.add_module(self.norm2_name, norm2)
+        
+        # self.conv3 = build_conv_layer(
+        #     conv_cfg,
+        #     planes,
+        #     outplanes,
+        #     kernel_size=1,
+        #     bias=True)
+        # self.add_module(self.norm3_name, norm3)
+        self.conv1 = DeformConv3d(
             conv_cfg,
             inplanes,
             planes,
@@ -169,22 +190,23 @@ class FusionConvBlock(BaseModule):
             bias=True)      
         self.add_module(self.norm1_name, norm1)
         
-        self.conv2 = build_conv_layer(
-                conv_cfg,
-                planes,
-                planes,
-                kernel_size=3,
-                padding=1,
-                bias=True)        
+        self.conv2 = DeformConv3d(
+            conv_cfg,
+            planes,
+            planes,
+            kernel_size=3,
+            padding=1,
+            bias=True)        
         self.add_module(self.norm2_name, norm2)
         
-        self.conv3 = build_conv_layer(
+        self.conv3 = DeformConv3d(
             conv_cfg,
             planes,
             outplanes,
             kernel_size=1,
             bias=True)
         self.add_module(self.norm3_name, norm3)
+
 
         self.relu = nn.ReLU(inplace=True)
         
@@ -972,7 +994,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
             nn.ModuleList([Scale(1.0) for _ in range(self.scale_dim)])
             for _ in self.strides
         ])
- 
+
         self.conv_radarOffset_prev = self._init_branch(     
             conv_channels=self.radarOffset_branch,           
             conv_strides=(1, ) * len(self.radarOffset_branch))
@@ -982,12 +1004,12 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
             conv_channels=self.radarDepthOffset_branch,           
             conv_strides=(1, ) * len(self.radarDepthOffset_branch))
         self.conv_radarDepthOffset = nn.Conv2d(self.radarDepthOffset_branch[-1], 1, 1)
-               
+            
         self.conv_radarClass_prev = self._init_cls_branch(    
             conv_channels=self.radarClass_branch,                    
             conv_strides=(1, ) * len(self.radarClass_branch))        
         self.conv_radarClass = nn.Conv2d(self.radarClass_branch[-1], self.cls_out_channels, 1) 
-               
+            
         self.radar_scales = nn.ModuleList([  
             nn.ModuleList([Scale(1.0) for _ in range(2)]) for _ in self.strides 
         ])  
@@ -1007,7 +1029,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
         
     def forward(self, feats):
         return multi_apply(self.forward_single, feats, self.scales,
-                           self.strides)[:5]
+                        self.strides)[:5]
 
 
     def forward_single(self, x_img, x_cat, scale, radar_scale, stride):
@@ -1651,7 +1673,8 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
             concat_lvl_bbox_targets_3d.append(bbox_targets_3d)
         return concat_lvl_labels_3d, concat_lvl_bbox_targets_3d, \
             concat_lvl_centerness_targets, concat_lvl_attr_targets
-
+    #INFO associate radar points with GT boxes and compute 2D offset from radar points 
+    #INFO to corresponding GT centers on image as well as depth offsets
     def _get_target_single(self, gt_bboxes, gt_labels, gt_bboxes_3d,
                         gt_labels_3d, centers2d, depths, attr_labels,
                         points, regress_ranges, num_points_per_lvl):
@@ -1885,7 +1908,8 @@ class PGDFusionHead(FCOSMono3DHead2):
                 normal_init(conv_weight, std=0.01)
 
     def forward(self, feats_img, feats_cat):
-        # 會跳到609行的forward_single
+        # 會跳到585行的forward_single
+        # 結束的eats_img,feats_cat長度都是5，且shape皆為[1,256,116,200]
         return multi_apply(self.forward_single, feats_img, feats_cat,
                            self.scales, self.radar_scales, self.strides)
 

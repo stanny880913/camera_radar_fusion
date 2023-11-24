@@ -180,7 +180,7 @@ def load_multi_radar_to_cam(nusc, cam2radar_mappings, results):
     # 將過濾後的雷達信息組合成相機坐標系中的雷達點雲
     xy_im = np.stack([x_i, y_i])     
     radar_pts = np.concatenate([xz_cam, xy_im, v_comp, v_raw], axis=0)  
-
+    #INFO radar_pts.shape = (9,36) 
     radar_pts = np.concatenate([radar_pts, rcs[None,:]], axis=0)  
     
     #初始化一個空的 3D 數組（radar_map），用於存儲雷達地圖信息

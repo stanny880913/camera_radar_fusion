@@ -31,8 +31,8 @@ model_args = dict(
         in_channels=10,  
         num_stages=4,
         out_indices=(0, 1, 2, 3),   
-        frozen_stages=-1,          
-        norm_cfg=dict(type='BN', requires_grad=True),
+        frozen_stages=-1,#表示所有層都是可訓練的，沒有凍結的層    
+        norm_cfg=dict(type='BN', requires_grad=True),#使用Batch Normalization（BN）作為歸一化層
         norm_eval=False,
         style='caffe'),
     neck_img=dict(  
