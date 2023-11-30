@@ -18,7 +18,8 @@ from lib.my_model.focal_loss import FocalLoss
 from lib.my_model.smooth_l1_loss import SmoothL1Loss
 from lib.my_model.cross_entropy_loss import CrossEntropyLoss
 from lib.my_model.bbox_coder import PGDBBoxCoder
-from lib.my_model.threedDDeformableConvolutions.DDeformableBlock import DeformConv3d
+from lib.my_model.threedDDeformableConvolutions.DDeformableBlock import DeformVoxResNet
+
 
 
 loss_registry = dict(FocalLoss=FocalLoss, SmoothL1Loss=SmoothL1Loss, 
@@ -157,32 +158,8 @@ class FusionConvBlock(BaseModule):
         self.norm1_name, norm1 = build_norm_layer(norm_cfg, planes, postfix=1)
         self.norm2_name, norm2 = build_norm_layer(norm_cfg, planes, postfix=2)
         self.norm3_name, norm3 = build_norm_layer(norm_cfg, outplanes, postfix=3)
-        
-        # self.conv1 = build_conv_layer(
-        #     conv_cfg,
-        #     inplanes,
-        #     planes,
-        #     kernel_size=1,
-        #     bias=True)      
-        # self.add_module(self.norm1_name, norm1)
-        
-        # self.conv2 = build_conv_layer(
-        #     conv_cfg,
-        #     planes,
-        #     planes,
-        #     kernel_size=3,
-        #     padding=1,
-        #     bias=True)        
-        # self.add_module(self.norm2_name, norm2)
-        
-        # self.conv3 = build_conv_layer(
-        #     conv_cfg,
-        #     planes,
-        #     outplanes,
-        #     kernel_size=1,
-        #     bias=True)
-        # self.add_module(self.norm3_name, norm3)
-        self.conv1 = DeformConv3d(
+        # BUG layer setting
+        self.conv1 = build_conv_layer(
             conv_cfg,
             inplanes,
             planes,
@@ -190,7 +167,7 @@ class FusionConvBlock(BaseModule):
             bias=True)      
         self.add_module(self.norm1_name, norm1)
         
-        self.conv2 = DeformConv3d(
+        self.conv2 = build_conv_layer(
             conv_cfg,
             planes,
             planes,
@@ -199,13 +176,40 @@ class FusionConvBlock(BaseModule):
             bias=True)        
         self.add_module(self.norm2_name, norm2)
         
-        self.conv3 = DeformConv3d(
+        self.conv3 = build_conv_layer(
             conv_cfg,
             planes,
             outplanes,
             kernel_size=1,
             bias=True)
         self.add_module(self.norm3_name, norm3)
+        
+        # self.conv1 = DeformVoxResNet(
+        #     inplanes,
+        #     planes,
+        #     kernel_size=1,
+        #     stride=1,
+        #     padding=1,
+        #     bias=True)      
+        # self.add_module(self.norm1_name, norm1)
+        
+        # self.conv2 = DeformVoxResNet(
+        #     planes,
+        #     planes,
+        #     kernel_size=3,
+        #     stride=1,
+        #     padding=1,
+        #     bias=True)        
+        # self.add_module(self.norm2_name, norm2)
+        
+        # self.conv3 = DeformVoxResNet(
+        #     planes,
+        #     outplanes,
+        #     kernel_size=1,
+        #     stride=1,
+        #     padding=1,
+        #     bias=True)
+        # self.add_module(self.norm3_name, norm3)
 
 
         self.relu = nn.ReLU(inplace=True)
@@ -227,7 +231,6 @@ class FusionConvBlock(BaseModule):
         
     def forward(self, x):
         """Forward function."""
-
         out = self.conv1(x)
         out = self.norm1(out)
         out = self.relu(out)
@@ -247,7 +250,7 @@ class SingleStageDetector(BaseDetector):
 
     def __init__(self,
                  backbone_img,            
-                 backbone_other,          
+                 backbone_other,
                  neck_img=None,          
                  neck_fusion=None,
                  bbox_head=None,
@@ -262,16 +265,18 @@ class SingleStageDetector(BaseDetector):
             warnings.warn('DeprecationWarning: pretrained is deprecated, '
                           'please use "init_cfg" instead')
             backbone_img.pretrained = pretrained_img
-        #resnet depth 101 => image backbone
         self.backbone_img = ResNet(**backbone_img)
-        #resnet depth 18 => radar backbone
-        self.backbone_other = ResNet(**backbone_other)
+        # self.backbone_other = ResNet(**backbone_other)
+        # self.backbone_img = DeformVoxResNet((32,32,32))
+        # self.backbone_other = DeformVoxResNet((32,32,32))
+        self.backbone_other = DeformVoxResNet(**backbone_other)
         
         if neck_img is not None:
             self.neck_img = FPN(**neck_img)
             
         if neck_fusion is not None:
             self.neck_fusion = FPN(**neck_fusion)
+            # self.neck_img = DeformVoxResNet(**neck_fusion)
             
         bbox_head.update(train_cfg=train_cfg)
         bbox_head.update(test_cfg=test_cfg)
@@ -296,14 +301,14 @@ class SingleStageDetector(BaseDetector):
 
         self.eval_mono = eval_mono
             
-    #INFO x_other is the radar backbone output
-    def extract_feat(self, img, radar_map):
-        # TODO 確認radar input的channel到底有什麼
-        # radar_map.shape =  torch.Size([1(batch_size), 10(channel), 928, 1600])
-        # print("radar map info = ",radar_map)
+    #INFO 特徵提取 x_other is the radar backbone output
+    def extract_feat(self, img, radar_map, depths):
         #img經過backbone 
         x_img = self.backbone_img(img)
         #radar經過backbone
+        # new_d = depths[0].size(0)
+        # depths = (new_d,)  # 将 depths 转换为元组
+        # radar_map = radar_map.unsqueeze(-1).expand(-1, -1, -1, -1, *depths)
         x_other = self.backbone_other(radar_map)
         
         x_cat = []
@@ -316,7 +321,7 @@ class SingleStageDetector(BaseDetector):
 
         #img經過Cam Neck
         x_img = self.neck_img(x_img)
-        #x_img = self.neck_img(x_cat)
+        # x_img = self.neck_img(x_cat)
         # print("image feature = ",x_img)
         #fusion經過Radar Neck
         x_cat = self.neck_fusion(x_cat)
@@ -362,7 +367,8 @@ class SingleStageMono3DDetector(SingleStageDetector):
                       attr_labels=None,
                       gt_bboxes_ignore=None):
       
-        x_img, x_cat = self.extract_feat(img, radar_map)  
+        # x_img, x_cat = self.extract_feat(img, radar_map)
+        x_img, x_cat = self.extract_feat(img, radar_map, depths) 
         losses = self.bbox_head.forward_train(x_img, x_cat, img_metas, gt_bboxes,  
                                               gt_labels, gt_bboxes_3d,
                                               gt_labels_3d, centers2d, depths,
@@ -432,7 +438,7 @@ class SingleStageMono3DDetector(SingleStageDetector):
 class PGDFusion3D(SingleStageMono3DDetector):
     def __init__(self,
                  backbone_img,
-                 backbone_other,                 
+                 backbone_other,          
                  neck_img,
                  neck_fusion,
                  bbox_head,
@@ -1909,7 +1915,7 @@ class PGDFusionHead(FCOSMono3DHead2):
 
     def forward(self, feats_img, feats_cat):
         # 會跳到585行的forward_single
-        # 結束的eats_img,feats_cat長度都是5，且shape皆為[1,256,116,200]
+        # 結束的feats_img,feats_cat長度都是5，且shape皆為[1,256,116,200]
         return multi_apply(self.forward_single, feats_img, feats_cat,
                            self.scales, self.radar_scales, self.strides)
 

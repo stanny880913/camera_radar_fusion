@@ -126,9 +126,10 @@ def single_gpu_test(model, model_mlp, data_loader):
 
 def train(args, model, train_loader, optimizer, lr_updater, epoch, iter_idx):
     model.train()
-    print("without freeze, camera branch will change mono weights!!!!!")
-    # freeze_subnet(model, ['backbone_img', 'neck_img'])
-    # freeze_cam_heads(model)
+    
+    # print("without freeze, camera branch will change mono weights!!!!!")
+    freeze_subnet(model, ['backbone_img', 'neck_img'])
+    freeze_cam_heads(model)
 
     ave_loss = 0
 
@@ -486,14 +487,14 @@ def main(args):
             # "dwn_radiant_pgd",
             # "train_result",
             "checkpoint_dwn.tar"
-            #"pre_checkpoint_dwn.tar"
+            # "pre_checkpoint_dwn.tar"
         )
         model_mlp = FusionMLP()
         checkpoint_mlp = torch.load(f_checkpoint_mlp)
         model_mlp.load_state_dict(filter_state_dict_keys(checkpoint_mlp["state_dict"]))
 
         data_loader = init_data_loader(args, NuScenesFusionDataset, "test")
-        #f_checkpoint = join(args.dir_result, "pre_checkpoint_branch.tar") 
+        # f_checkpoint = join(args.dir_result, "pre_checkpoint_branch.tar") 
         f_checkpoint = join(args.dir_result, "checkpoint_branch.tar")
         if os.path.isfile(f_checkpoint):
             print("load model")
