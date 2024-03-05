@@ -41,6 +41,7 @@ def create_data(model, loader, task_name='generate data'):
         for data_batch in tqdm(loader, task_name):             
             data = model.create_data_step(data_batch)  
             data_all.extend(data)
+            print("!!!!! === ", data_all)
     
     data_all = np.stack(data_all)        
     
@@ -70,7 +71,7 @@ def main(args):
     
     if not args.dir_checkpoint:
         # args.dir_checkpoint = join(args.dir_data, 'fusion_data', 'train_result', 'radiant_pgd')
-        args.dir_checkpoint = "dir_results"
+        args.dir_checkpoint = "dir_results/train_mini/ori_struct/"
     
     args.out_path = join(args.dir_data, 'fusion_data', 'dwn_radiant_pgd')              
     mkdir(args.out_path) 
@@ -114,4 +115,3 @@ if __name__ == '__main__':
    
     args = parser.parse_args()
     main(args)
-

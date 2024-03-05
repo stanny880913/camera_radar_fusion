@@ -113,8 +113,11 @@ class FusionMLP(nn.Module):
         super().__init__()
 
         self.fc1 = nn.Linear(16, 64)
+        # self.bn1 = nn.BatchNorm1d(64)  # 批次正規化層
         self.fc2 = nn.Linear(64, 64)
+        # self.bn2 = nn.BatchNorm1d(64)  # 批次正規化層
         self.fc3 = nn.Linear(64, 32)
+        # self.bn3 = nn.BatchNorm1d(32)  # 批次正規化層
         self.fc4 = nn.Linear(32, 1)
 
     def forward(self, x):
@@ -188,7 +191,7 @@ def cal_metrics(output, gt):
                 error_best = error_best.item(),
                 error_prd = error_prd.item())
 
- 
+
 def init_env():    
     use_cuda = torch.cuda.is_available()    
     device0 = torch.device('cuda:0' if use_cuda else 'cpu')    
@@ -241,7 +244,7 @@ def plot_and_save_loss_curve(args, epoch, loss_train, loss_val):
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('loss')
-    plt.savefig(join(args.dir_result, 'loss.png'))
+    plt.savefig(join(args.dir_result, 'loss_dwn.png'))
 
 
 def save_checkpoint(epoch, model, optimizer, loss_train, loss_val, loss_val_min, state_dict_best, args):
@@ -272,20 +275,20 @@ def main(args):
     
     train_ann_files = [join(args.dir_data, 'train.json')] 
     val_ann_files = [join(args.dir_data, 'val.json')]
-    # train_ann_files = [join(args.dir_data, 'train_mini.json')] 
-    # val_ann_files = [join(args.dir_data, 'val_mini.json')]
+    train_mini_ann_files = [join(args.dir_data, 'train_mini.json')] 
+    val__mini_ann_files = [join(args.dir_data, 'val_mini.json')]
     
     device0, available_gpu_ids = init_env()
     args.num_gpus = len(available_gpu_ids)
     print('%d GPUs' % args.num_gpus)
     
     if not args.do_eval:
-        train_loader = DataLoader(dataset = FusionDataset(train_ann_files),
+        train_loader = DataLoader(dataset = FusionDataset(train_mini_ann_files),
                           batch_size = args.num_gpus * args.samples_per_gpu,
                         shuffle = True,
                           num_workers = args.num_gpus * args.workers_per_gpu)
-       
-    val_loader = DataLoader(dataset = FusionDataset(val_ann_files),
+    
+    val_loader = DataLoader(dataset = FusionDataset(val__mini_ann_files),
                             batch_size = args.num_gpus * args.samples_per_gpu,
                             shuffle = False,
                             num_workers = args.num_gpus * args.workers_per_gpu)
@@ -298,7 +301,7 @@ def main(args):
         
         loss_train, loss_val, start_epoch, state_dict_best, loss_val_min = \
             init_params(args, model, optimizer)
-          
+        
         for epoch in range(start_epoch, args.epochs):
         
             start = timer() 
@@ -312,11 +315,11 @@ def main(args):
             plot_and_save_loss_curve(args, epoch, loss_train, loss_val)
             
             loss_val_min, state_dict_best = save_checkpoint(epoch, model, optimizer, loss_train, loss_val, loss_val_min, state_dict_best, args)
-                         
+                        
             end = timer(); t = (end - start) / 60; print('Time used: %.1f minutes\n' % t)
             
             print('Training Epoch %d finished.' % epoch )
-                 
+                
     if args.do_eval:     
         f_checkpoint = join(args.dir_result, 'checkpoint.tar')        
         if os.path.isfile(f_checkpoint):

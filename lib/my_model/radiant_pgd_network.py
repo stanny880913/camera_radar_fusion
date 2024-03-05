@@ -18,7 +18,6 @@ from lib.my_model.focal_loss import FocalLoss
 from lib.my_model.smooth_l1_loss import SmoothL1Loss
 from lib.my_model.cross_entropy_loss import CrossEntropyLoss
 from lib.my_model.bbox_coder import PGDBBoxCoder
-from lib.my_model.threedDDeformableConvolutions.DDeformableBlock import DeformVoxResNet
 
 
 
@@ -27,6 +26,295 @@ loss_registry = dict(FocalLoss=FocalLoss, SmoothL1Loss=SmoothL1Loss,
                      GIoULoss = GIoULoss)
 bbox_coder_registry = dict(PGDBBoxCoder = PGDBBoxCoder)
 INF = 1e8
+
+# INFO Swin transformer block
+def window_reverse(windows, window_size, H, W):
+    """
+    Args:
+        windows: (num_windows*B, window_size, window_size, C)
+        window_size (int): Window size
+        H (int): Height of image
+        W (int): Width of image
+    Returns:
+        x: (B, H, W, C)
+    """
+    B = int(windows.shape[0] / (H * W / window_size / window_size))
+    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
+    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+    return x
+
+class Mlp(nn.Module):
+
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.SiLU, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
+
+class DropPath(nn.Module):
+    """DropPath class"""
+
+    def __init__(self, drop_prob=None):
+        super(DropPath, self).__init__()
+        self.drop_prob = drop_prob
+
+    def drop_path(self, inputs):
+        """drop path op
+        Args:
+            input: tensor with arbitrary shape
+            drop_prob: float number of drop path probability, default: 0.0
+            training: bool, if current mode is training, default: False
+        Returns:
+            output: output tensor after drop path
+        """
+        # if prob is 0 or eval mode, return original input
+        if self.drop_prob == 0. or not self.training:
+            return inputs
+        keep_prob = 1 - self.drop_prob
+        keep_prob = paddle.to_tensor(keep_prob, dtype='float32')
+        shape = (inputs.shape[0], ) + (1, ) * (inputs.ndim - 1)  # shape=(N, 1, 1, 1)
+        random_tensor = keep_prob + paddle.rand(shape, dtype=inputs.dtype)
+        random_tensor = random_tensor.floor()  # mask
+        output = inputs.divide(keep_prob) * random_tensor  # divide is to keep same output expectation
+        return output
+
+    def forward(self, inputs):
+        return self.drop_path(inputs)
+
+class WindowAttention(nn.Module):
+
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.):
+
+        super().__init__()
+        self.dim = dim
+        self.window_size = window_size  # Wh, Ww
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = qk_scale or head_dim ** -0.5
+
+        # define a parameter table of relative position bias
+        self.relative_position_bias_table = nn.Parameter(
+            torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+
+        # get pair-wise relative position index for each token inside the window
+        coords_h = torch.arange(self.window_size[0])
+        coords_w = torch.arange(self.window_size[1])
+        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
+        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
+        relative_coords[:, :, 0] += self.window_size[0] - 1  # shift to start from 0
+        relative_coords[:, :, 1] += self.window_size[1] - 1
+        relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
+        relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+        self.register_buffer("relative_position_index", relative_position_index)
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        nn.init.normal_(self.relative_position_bias_table, std=.02)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x, mask=None):
+
+        B_, N, C = x.shape
+        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
+
+        q = q * self.scale
+        attn = (q @ k.transpose(-2, -1))
+
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+        attn = attn + relative_position_bias.unsqueeze(0)
+
+        if mask is not None:
+            nW = mask.shape[0]
+            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+            attn = attn.view(-1, self.num_heads, N, N)
+            attn = self.softmax(attn)
+        else:
+            attn = self.softmax(attn)
+
+        attn = self.attn_drop(attn)
+
+        # print(attn.dtype, v.dtype)
+        try:
+            x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        except:
+            # print(attn.dtype, v.dtype)
+            x = (attn.half() @ v).transpose(1, 2).reshape(B_, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+def window_partition(x, window_size):
+    """
+    Args:
+        x: (B, H, W, C)
+        window_size (int): window size
+    Returns:
+        windows: (num_windows*B, window_size, window_size, C)
+    """
+    B, H, W, C = x.shape
+    x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
+    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
+    return windows
+
+class SwinTransformerLayer(nn.Module):
+
+    def __init__(self, dim, num_heads, window_size=8, shift_size=0,
+                 mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
+                 act_layer=nn.SiLU, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        self.window_size = window_size
+        self.shift_size = shift_size
+        self.mlp_ratio = mlp_ratio
+        # if min(self.input_resolution) <= self.window_size:
+        #     # if window size is larger than input resolution, we don't partition windows
+        #     self.shift_size = 0
+        #     self.window_size = min(self.input_resolution)
+        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+
+        self.norm1 = norm_layer(dim)
+        self.attn = WindowAttention(
+            dim, window_size=(self.window_size, self.window_size), num_heads=num_heads,
+            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
+    def create_mask(self, H, W):
+        # calculate attention mask for SW-MSA
+        img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
+        h_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        w_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        cnt = 0
+        for h in h_slices:
+            for w in w_slices:
+                img_mask[:, h, w, :] = cnt
+                cnt += 1
+
+        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
+        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+
+        return attn_mask
+
+    def forward(self, x):
+        # reshape x[b c h w] to x[b l c]
+        x = torch.cat([x[0], x[1]], dim=2)  # concat
+        _, _, H_, W_ = x.shape
+
+        Padding = False
+        if min(H_, W_) < self.window_size or H_ % self.window_size != 0 or W_ % self.window_size != 0:
+            Padding = True
+            # print(f'img_size {min(H_, W_)} is less than (or not divided by) window_size {self.window_size}, Padding.')
+            pad_r = (self.window_size - W_ % self.window_size) % self.window_size
+            pad_b = (self.window_size - H_ % self.window_size) % self.window_size
+            x = F.pad(x, (0, pad_r, 0, pad_b))
+
+        # print('2', x.shape)
+        B, C, H, W = x.shape
+        L = H * W
+        x = x.permute(0, 2, 3, 1).contiguous().view(B, L, C)  # b, L, c
+
+        # create mask from init to forward
+        if self.shift_size > 0:
+            attn_mask = self.create_mask(H, W).to(x.device)
+        else:
+            attn_mask = None
+
+        shortcut = x
+        x = self.norm1(x)
+        x = x.view(B, H, W, C)
+
+        # cyclic shift
+        if self.shift_size > 0:
+            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+        else:
+            shifted_x = x
+
+        # partition windows
+        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
+
+        # W-MSA/SW-MSA
+        attn_windows = self.attn(x_windows, mask=attn_mask)  # nW*B, window_size*window_size, C
+
+        # merge windows
+        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
+        shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
+
+        # reverse cyclic shift
+        if self.shift_size > 0:
+            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+        else:
+            x = shifted_x
+        x = x.view(B, H * W, C)
+
+        # FFN
+        x = shortcut + self.drop_path(x)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+
+        x = x.permute(0, 2, 1).contiguous().view(-1, C, H, W)  # b c h w
+
+        if Padding:
+            x = x[:, :, :H_, :W_]  # reverse padding
+
+        return x
+
+class SwinTransformerBlock(nn.Module):
+    def __init__(self, c1, c2, num_heads=0, num_layers=1, window_size=8, vert_anchors=8, horz_anchors=8):
+        super().__init__()
+        self.vert_anchors = vert_anchors
+        self.horz_anchors = horz_anchors
+        self.avgpool = nn.AdaptiveAvgPool2d(
+            (self.vert_anchors, self.horz_anchors))
+        e = 0.5
+        c_ = int(c2 * e)
+        num_heads = c_ // 32
+        self.conv = None
+        if c1 != c2:
+            self.conv = Conv(c1, c2)
+
+        # remove input_resolution
+        self.blocks = nn.Sequential(*[SwinTransformerLayer(dim=c2, num_heads=num_heads, window_size=window_size,
+                                                           shift_size=0 if (i % 2 == 0) else window_size // 2) for i in range(num_layers)])
+
+    def forward(self, x):
+        if self.conv is not None:
+            x = self.conv(x)
+        x = self.blocks(x)
+        x_dim2 = int(x.shape[2]/2)
+        rgb_fea_out = x[:, :, :x_dim2, :]
+        ir_fea_out = x[:, :, x_dim2:, :]
+        return rgb_fea_out, ir_fea_out
+
+# INFO ===================================================
 
 class BaseDetector(BaseModule, metaclass=ABCMeta):
     """Base class for detectors."""
@@ -141,8 +429,6 @@ class BaseDetector(BaseModule, metaclass=ABCMeta):
     def create_data_step(self, data):
         return self.forward_create_data(**data)   
 
-
-
 class FusionConvBlock(BaseModule):
     
     def __init__(self,
@@ -184,34 +470,6 @@ class FusionConvBlock(BaseModule):
             bias=True)
         self.add_module(self.norm3_name, norm3)
         
-        # self.conv1 = DeformVoxResNet(
-        #     inplanes,
-        #     planes,
-        #     kernel_size=1,
-        #     stride=1,
-        #     padding=1,
-        #     bias=True)      
-        # self.add_module(self.norm1_name, norm1)
-        
-        # self.conv2 = DeformVoxResNet(
-        #     planes,
-        #     planes,
-        #     kernel_size=3,
-        #     stride=1,
-        #     padding=1,
-        #     bias=True)        
-        # self.add_module(self.norm2_name, norm2)
-        
-        # self.conv3 = DeformVoxResNet(
-        #     planes,
-        #     outplanes,
-        #     kernel_size=1,
-        #     stride=1,
-        #     padding=1,
-        #     bias=True)
-        # self.add_module(self.norm3_name, norm3)
-
-
         self.relu = nn.ReLU(inplace=True)
         
     @property
@@ -245,7 +503,6 @@ class FusionConvBlock(BaseModule):
 
         return out
 
-
 class SingleStageDetector(BaseDetector):
 
     def __init__(self,
@@ -266,17 +523,13 @@ class SingleStageDetector(BaseDetector):
                           'please use "init_cfg" instead')
             backbone_img.pretrained = pretrained_img
         self.backbone_img = ResNet(**backbone_img)
-        # self.backbone_other = ResNet(**backbone_other)
-        # self.backbone_img = DeformVoxResNet((32,32,32))
-        # self.backbone_other = DeformVoxResNet((32,32,32))
-        self.backbone_other = DeformVoxResNet(**backbone_other)
+        self.backbone_other = ResNet(**backbone_other)
         
         if neck_img is not None:
             self.neck_img = FPN(**neck_img)
             
         if neck_fusion is not None:
             self.neck_fusion = FPN(**neck_fusion)
-            # self.neck_img = DeformVoxResNet(**neck_fusion)
             
         bbox_head.update(train_cfg=train_cfg)
         bbox_head.update(test_cfg=test_cfg)
@@ -300,20 +553,32 @@ class SingleStageDetector(BaseDetector):
                 FusionConvBlock(inplanes, planes, outplanes) )
 
         self.eval_mono = eval_mono
+
+
             
     #INFO 特徵提取 x_other is the radar backbone output
-    def extract_feat(self, img, radar_map, depths):
+    def extract_feat(self, img, radar_map):
+        # radar_map = [x[i], depth[i], 1, vx[i], vz[i], v_amplitude[i], vx_comp[i], vz_comp[i], v_comp_amplitude[i], rcs[i]]
         #img經過backbone 
         x_img = self.backbone_img(img)
         #radar經過backbone
-        # new_d = depths[0].size(0)
-        # depths = (new_d,)  # 将 depths 转换为元组
-        # radar_map = radar_map.unsqueeze(-1).expand(-1, -1, -1, -1, *depths)
+        # x_other is len=4 tuple,and 
+        # x_other[0].shape=[1,64,232,400]
+        # x_other[1].shape=[1,128,116,200]
+        # x_other[2].shape=[1,256,58,100]
+        # x_other[3].shape=[1,512,29,50]
         x_other = self.backbone_other(radar_map)
         
+        # print("x_img shape : ", x_img.shape())
+        # print("x_other shape : ", x_other.shape())
+        # INFO Use concat to fusion data
         x_cat = []
         for x_i, x_o in zip(x_img, x_other):
             x_cat.append(torch.cat([x_i, x_o], dim=1))
+        # INFO use swin transformer to fuse data
+        x_swin = []
+        for x_i, x_o in zip(x_img, x_other):
+            x_cat.append(torch.cat([x_i, x_o], dim=1)) 
 
         #go through bottleneck, fusion_convs is bottleneck setting
         for i in range(3):
@@ -321,14 +586,10 @@ class SingleStageDetector(BaseDetector):
 
         #img經過Cam Neck
         x_img = self.neck_img(x_img)
-        # x_img = self.neck_img(x_cat)
-        # print("image feature = ",x_img)
         #fusion經過Radar Neck
         x_cat = self.neck_fusion(x_cat)
-        # print("concat feature = ",x_cat)
 
         return x_img, x_cat
-
 
     def forward_dummy(self, img):
         """Used for computing network flops.
@@ -338,7 +599,6 @@ class SingleStageDetector(BaseDetector):
         x = self.extract_feat(img)
         outs = self.bbox_head(x)
         return outs
-
 
 class SingleStageMono3DDetector(SingleStageDetector):
     """Base class for monocular 3D single-stage detectors.
@@ -367,8 +627,7 @@ class SingleStageMono3DDetector(SingleStageDetector):
                       attr_labels=None,
                       gt_bboxes_ignore=None):
       
-        # x_img, x_cat = self.extract_feat(img, radar_map)
-        x_img, x_cat = self.extract_feat(img, radar_map, depths) 
+        x_img, x_cat = self.extract_feat(img, radar_map) 
         losses = self.bbox_head.forward_train(x_img, x_cat, img_metas, gt_bboxes,  
                                               gt_labels, gt_bboxes_3d,
                                               gt_labels_3d, centers2d, depths,
@@ -434,7 +693,6 @@ class SingleStageMono3DDetector(SingleStageDetector):
                                                   radar_pts)
         return data            
 
-
 class PGDFusion3D(SingleStageMono3DDetector):
     def __init__(self,
                  backbone_img,
@@ -457,7 +715,6 @@ class PGDFusion3D(SingleStageMono3DDetector):
                                           pretrained_img, 
                                           pretrained_other, 
                                           eval_mono)
-        
 
 class BaseMono3DDenseHead(BaseModule, metaclass=ABCMeta):
     """Base class for Monocular 3D DenseHeads."""
@@ -521,10 +778,6 @@ class BaseMono3DDenseHead(BaseModule, metaclass=ABCMeta):
         
         return data_label
     
-    
-
-
-
 class AnchorFreeMono3DHead(BaseMono3DDenseHead):
 
     _version = 1
@@ -1039,8 +1292,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
 
 
     def forward_single(self, x_img, x_cat, scale, radar_scale, stride):
-        #INFO cls_score, bbox_pred, dir_cls_pred, attr_pred, cls_feat, reg_feat,\ are
-        #INFO camera branch outputs:
+    #INFO cls_score, bbox_pred, dir_cls_pred, attr_pred, cls_feat, reg_feat are camera branch outputs
         cls_score, bbox_pred, dir_cls_pred, attr_pred, cls_feat, reg_feat,\
         radar_cls_feat, radar_reg_feat = super().forward_single(x_img, x_cat)
         
@@ -1492,7 +1744,7 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
                  
         return indices_pixel, indices_r        
     
-    
+    #INFO associate radar points with GT boxes and compute 2D offset from radar points to corresponding GT centers on image as well as depth offsets
     def _get_radar_target_single(self, gt_bboxes, gt_labels, gt_bboxes_3d,
                                 centers2d, depths, radar_pts, points, regress_ranges, num_points_per_lvl):
 
@@ -1783,8 +2035,6 @@ class FCOSMono3DHead2(AnchorFreeMono3DHead2):
 
         return labels, bbox_targets, labels_3d, bbox_targets_3d, \
             centerness_targets, attr_labels, min_dist_inds
-
-
 
 class PGDFusionHead(FCOSMono3DHead2):
 

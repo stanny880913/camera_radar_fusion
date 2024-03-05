@@ -184,7 +184,7 @@ class NuScenesFusionDataset(Dataset):
         
         return results
     
-       
+    
     def prepare_test_img(self, idx):
         """Get testing data  after pipeline.
         Args:

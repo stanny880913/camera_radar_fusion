@@ -24,7 +24,7 @@ class BasicBlock(BaseModule):
                  plugins=None,
                  init_cfg=None):
         super(BasicBlock, self).__init__(init_cfg)
-        assert dcn is None, 'Not implemented yet.'
+        # assert dcn is None, 'Not implemented yet.'
         assert plugins is None, 'Not implemented yet.'
 
         self.norm1_name, norm1 = build_norm_layer(norm_cfg, planes, postfix=1)
@@ -370,8 +370,10 @@ class ResNet(BaseModule):
                  conv_cfg=None,
                  norm_cfg=dict(type='BN', requires_grad=True),
                  norm_eval=True,
-                 dcn=None,
-                 stage_with_dcn=(False, False, False, False),
+                #  dcn=None,
+                #  stage_with_dcn=(False, False, False, False),
+                 dcn=dict(type='DCNv2', deform_groups=1, fallback_on_stride=False),
+                 stage_with_dcn=(False, False, True, True),
                  plugins=None,
                  with_cp=False,
                  zero_init_residual=True,

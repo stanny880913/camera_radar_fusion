@@ -144,7 +144,7 @@ def train(args, model, train_loader, optimizer, lr_updater, epoch, iter_idx):
         # gt_labels_3d
         # centers2d
         # depths
-        # radar_map
+        # radar_maㄛp
         # radar_pts]
         lr_updater.before_train_iter(optimizer, iter_idx)  # 動態調整lr
         optimizer.zero_grad()  # 清除梯度
@@ -483,11 +483,9 @@ def main(args):
     if args.do_eval:
         f_checkpoint_mlp = join(
             args.dir_result,
-            # "fusion_data",
-            # "dwn_radiant_pgd",
-            # "train_result",
+            "train_mini",
+            "concat_radar/"
             "checkpoint_dwn.tar"
-            # "pre_checkpoint_dwn.tar"
         )
         model_mlp = FusionMLP()
         checkpoint_mlp = torch.load(f_checkpoint_mlp)
@@ -495,7 +493,7 @@ def main(args):
 
         data_loader = init_data_loader(args, NuScenesFusionDataset, "test")
         # f_checkpoint = join(args.dir_result, "pre_checkpoint_branch.tar") 
-        f_checkpoint = join(args.dir_result, "checkpoint_branch.tar")
+        f_checkpoint = join(args.dir_result, "train_mini/concat_radar/checkpoint_branch.tar")
         if os.path.isfile(f_checkpoint):
             print("load model")
             checkpoint = torch.load(f_checkpoint)
@@ -522,7 +520,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--path_checkpoint_pgd",
         type=str,
-        default="model/pgd_r101_caffe_fpn_gn-head_2x16_2x_nus-mono3d_finetune_20211114_162135-5ec7c1cd.pth",
+        default="model/pgd_r101_caffe_fpn_gn-head_2x16_2x_nus-mono3d_finetune_20211114_162135-5ec7c1cd.pth"
     )
 
     parser.add_argument("--seed", type=int, default=0)
